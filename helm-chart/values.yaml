@@ -103,6 +103,17 @@ currencyService:
       cpu: 200m
       memory: 256Mi
 
+discountCodeService:
+  create: true
+  name: discountcodeservice
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 emailService:
   create: true
   name: emailservice
