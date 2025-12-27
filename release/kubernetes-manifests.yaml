@@ -95,6 +95,78 @@ metadata:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: discountcodeservice
+  labels:
+    app: discountcodeservice
+spec:
+  selector:
+    matchLabels:
+      app: discountcodeservice
+  template:
+    metadata:
+      labels:
+        app: discountcodeservice
+    spec:
+      serviceAccountName: discountcodeservice
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: server
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+        image: discountcodeservice
+        ports:
+        - name: grpc
+          containerPort: 7001
+        env:
+        - name: PORT
+          value: "7001"
+        readinessProbe:
+          grpc:
+            port: 7001
+        livenessProbe:
+          grpc:
+            port: 7001
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: discountcodeservice
+  labels:
+    app: discountcodeservice
+spec:
+  type: ClusterIP
+  selector:
+    app: discountcodeservice
+  ports:
+  - name: grpc
+    port: 7001
+    targetPort: 7001
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: discountcodeservice
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: loadgenerator
   labels:
     app: loadgenerator
@@ -306,6 +378,8 @@ spec:
             value: "currencyservice:7000"
           - name: CART_SERVICE_ADDR
             value: "cartservice:7070"
+          - name: DISCOUNT_CODE_SERVICE_ADDR
+            value: "discountcodeservice:7001"
           resources:
             requests:
               cpu: 100m
