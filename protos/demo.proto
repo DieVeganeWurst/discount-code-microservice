@@ -172,6 +172,31 @@ message CurrencyConversionRequest {
     string to_code = 2;
 }
 
+// -------------Discount Code service-----------------
+
+service DiscountCodeService {
+    rpc ApplyDiscount(ApplyDiscountRequest) returns (ApplyDiscountResponse) {}
+}
+
+message ApplyDiscountRequest {
+    string discount_code = 1;
+    Money cart_total = 2;
+}
+
+message ApplyDiscountResponse {
+    Money discount_amount = 1;
+    Money final_total = 2;
+    DiscountErrorCode error_code = 3;
+}
+
+enum DiscountErrorCode {
+    DISCOUNT_ERROR_CODE_NONE = 0;
+    DISCOUNT_ERROR_CODE_INVALID = 1;
+    DISCOUNT_ERROR_CODE_EXPIRED = 2;
+    DISCOUNT_ERROR_CODE_NOT_APPLICABLE = 3;
+    DISCOUNT_ERROR_CODE_LIMIT_REACHED = 4;
+}
+
 // -------------Payment service-----------------
 
 service PaymentService {
