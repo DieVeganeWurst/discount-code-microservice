@@ -34,7 +34,8 @@ import (
 const (
 	defaultPort     = "7001"
 	defaultCurrency = "USD"
-	sampleCode      = "94043"
+	codeSave10      = "SAVE10"
+	codeSave20      = "SAVE20"
 )
 
 var log *logrus.Logger
@@ -107,17 +108,31 @@ func (s *server) ApplyDiscount(ctx context.Context, in *pb.ApplyDiscountRequest)
 		}, nil
 	}
 
-	code := strings.TrimSpace(in.DiscountCode)
-	if code != sampleCode {
+	code := strings.ToUpper(strings.TrimSpace(in.DiscountCode))
+	var discountNanos int64
+	switch code {
+	case codeSave10:
+		// SAVE10: 10% off any positive total.
+		discountNanos = totalNanos / 10
+	case codeSave20:
+		// SAVE20: 20% off only when cart total is at least 100.
+		if totalNanos < 100*1_000_000_000 {
+			return &pb.ApplyDiscountResponse{
+				DiscountAmount: zeroMoney(currency),
+				FinalTotal:     moneyFromNanos(currency, totalNanos),
+				ErrorCode:      pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NOT_APPLICABLE,
+				}, nil
+		}
+		discountNanos = totalNanos / 5
+	default:
+		// Unknown code is treated as invalid.
 		return &pb.ApplyDiscountResponse{
 			DiscountAmount: zeroMoney(currency),
 			FinalTotal:     moneyFromNanos(currency, totalNanos),
 			ErrorCode:      pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_INVALID,
-		}, nil
+			}, nil
 	}
 
-	// TODO: replace this sample logic with real discount lookup rules.
-	discountNanos := totalNanos / 10
 	finalNanos := totalNanos - discountNanos
 
 	return &pb.ApplyDiscountResponse{
