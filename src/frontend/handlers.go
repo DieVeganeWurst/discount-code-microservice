@@ -35,6 +35,7 @@ import (
 	pb "github.com/GoogleCloudPlatform/microservices-demo/src/frontend/genproto"
 	"github.com/GoogleCloudPlatform/microservices-demo/src/frontend/money"
 	"github.com/GoogleCloudPlatform/microservices-demo/src/frontend/validator"
+	"google.golang.org/grpc/metadata"
 )
 
 type platformDetails struct {
@@ -55,6 +56,18 @@ var (
 )
 
 var validEnvs = []string{"local", "gcp", "azure", "aws", "onprem", "alibaba"}
+
+type cartItemView struct {
+	Item     *pb.Product
+	Quantity int32
+	Price    *pb.Money
+}
+
+type cartSummary struct {
+	items        []cartItemView
+	shippingCost *pb.Money
+	total        pb.Money
+}
 
 func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
@@ -232,7 +245,7 @@ func (fe *frontendServer) addToCartHandler(w http.ResponseWriter, r *http.Reques
 		renderHTTPError(log, r, w, errors.Wrap(err, "failed to add to cart"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("location", baseUrl + "/cart")
+	w.Header().Set("location", baseUrl+"/cart")
 	w.WriteHeader(http.StatusFound)
 }
 
@@ -244,7 +257,7 @@ func (fe *frontendServer) emptyCartHandler(w http.ResponseWriter, r *http.Reques
 		renderHTTPError(log, r, w, errors.Wrap(err, "failed to empty cart"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("location", baseUrl + "/")
+	w.Header().Set("location", baseUrl+"/")
 	w.WriteHeader(http.StatusFound)
 }
 
@@ -262,55 +275,64 @@ func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// ignores the error retrieving recommendations since it is not critical
 	recommendations, err := fe.getRecommendations(r.Context(), sessionID(r), cartIDs(cart))
 	if err != nil {
 		log.WithField("error", err).Warn("failed to get product recommendations")
 	}
 
-	shippingCost, err := fe.getShippingQuote(r.Context(), cart, currentCurrency(r))
+	summary, err := fe.buildCartSummary(r.Context(), cart, currentCurrency(r))
 	if err != nil {
-		renderHTTPError(log, r, w, errors.Wrap(err, "failed to get shipping quote"), http.StatusInternalServerError)
+		renderHTTPError(log, r, w, err, http.StatusInternalServerError)
 		return
 	}
 
-	type cartItemView struct {
-		Item     *pb.Product
-		Quantity int32
-		Price    *pb.Money
-	}
-	items := make([]cartItemView, len(cart))
-	totalPrice := pb.Money{CurrencyCode: currentCurrency(r)}
-	for i, item := range cart {
-		p, err := fe.getProduct(r.Context(), item.GetProductId())
-		if err != nil {
-			renderHTTPError(log, r, w, errors.Wrapf(err, "could not retrieve product #%s", item.GetProductId()), http.StatusInternalServerError)
-			return
-		}
-		price, err := fe.convertCurrency(r.Context(), p.GetPriceUsd(), currentCurrency(r))
-		if err != nil {
-			renderHTTPError(log, r, w, errors.Wrapf(err, "could not convert currency for product #%s", item.GetProductId()), http.StatusInternalServerError)
-			return
-		}
+	discountCode := activeDiscountCode(r)
+	discountAmount := zeroMoney(summary.total.GetCurrencyCode())
+	finalTotal := summary.total
+	discountError := pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE
 
-		multPrice := money.MultiplySlow(*price, uint32(item.GetQuantity()))
-		items[i] = cartItemView{
-			Item:     p,
-			Quantity: item.GetQuantity(),
-			Price:    &multPrice}
-		totalPrice = money.Must(money.Sum(totalPrice, multPrice))
+	if discountCode != "" {
+		resp, err := fe.applyDiscount(r.Context(), discountCode, &summary.total)
+		if err != nil {
+			log.WithError(err).Warn("failed to reach discount service")
+			discountError = pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_INVALID
+		} else {
+			discountError = resp.GetErrorCode()
+			if resp.GetErrorCode() == pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE {
+				if resp.GetDiscountAmount() != nil {
+					discountAmount = *resp.GetDiscountAmount()
+				}
+				if resp.GetFinalTotal() != nil {
+					finalTotal = *resp.GetFinalTotal()
+				}
+			} else {
+				clearDiscountCode(w)
+			}
+		}
 	}
-	totalPrice = money.Must(money.Sum(totalPrice, *shippingCost))
+	discountStatus := r.URL.Query().Get("discount")
+	if discountStatus == "" && discountCode != "" {
+		if discountError == pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE {
+			discountStatus = "applied"
+		} else {
+			discountStatus = "invalid"
+		}
+	}
 	year := time.Now().Year()
 
 	if err := templates.ExecuteTemplate(w, "cart", injectCommonTemplateData(r, map[string]interface{}{
 		"currencies":       currencies,
 		"recommendations":  recommendations,
 		"cart_size":        cartSize(cart),
-		"shipping_cost":    shippingCost,
+		"shipping_cost":    summary.shippingCost,
 		"show_currency":    true,
-		"total_cost":       totalPrice,
-		"items":            items,
+		"total_cost":       summary.total,
+		"final_cost":       finalTotal,
+		"discount_amount":  discountAmount,
+		"discount_code":    discountCode,
+		"discount_error":   discountError,
+		"discount_status":  discountStatus,
+		"items":            summary.items,
 		"expiration_years": []int{year, year + 1, year + 2, year + 3, year + 4},
 	})); err != nil {
 		log.Println(err)
@@ -351,8 +373,14 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	ctx := r.Context()
+	discountCode := activeDiscountCode(r)
+	if discountCode != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "discount-code", discountCode)
+	}
+
 	order, err := pb.NewCheckoutServiceClient(fe.checkoutSvcConn).
-		PlaceOrder(r.Context(), &pb.PlaceOrderRequest{
+		PlaceOrder(ctx, &pb.PlaceOrderRequest{
 			Email: payload.Email,
 			CreditCard: &pb.CreditCardInfo{
 				CreditCardNumber:          payload.CcNumber,
@@ -382,6 +410,15 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		multPrice := money.MultiplySlow(*v.GetCost(), uint32(v.GetItem().GetQuantity()))
 		totalPaid = money.Must(money.Sum(totalPaid, multPrice))
 	}
+	if discountCode != "" {
+		resp, err := fe.applyDiscount(r.Context(), discountCode, &totalPaid)
+		if err != nil {
+			log.WithError(err).Warn("failed to compute discounted total for order summary")
+		} else if resp.GetErrorCode() == pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE && resp.GetFinalTotal() != nil {
+			totalPaid = *resp.GetFinalTotal()
+		}
+	}
+	clearDiscountCode(w)
 
 	currencies, err := fe.getCurrencies(r.Context())
 	if err != nil {
@@ -423,7 +460,7 @@ func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) 
 		c.MaxAge = -1
 		http.SetCookie(w, c)
 	}
-	w.Header().Set("Location", baseUrl + "/")
+	w.Header().Set("Location", baseUrl+"/")
 	w.WriteHeader(http.StatusFound)
 }
 
@@ -632,4 +669,123 @@ func stringinSlice(slice []string, val string) bool {
 		}
 	}
 	return false
+}
+
+func (fe *frontendServer) applyDiscount(ctx context.Context, code string, total *pb.Money) (*pb.ApplyDiscountResponse, error) {
+	return pb.NewDiscountCodeServiceClient(fe.discountSvcConn).
+		ApplyDiscount(ctx, &pb.ApplyDiscountRequest{
+			DiscountCode: code,
+			CartTotal:    total,
+		})
+}
+
+func (fe *frontendServer) buildCartSummary(ctx context.Context, cart []*pb.CartItem, currency string) (cartSummary, error) {
+	summary := cartSummary{
+		items: []cartItemView{},
+		total: pb.Money{CurrencyCode: currency},
+	}
+
+	shippingCost, err := fe.getShippingQuote(ctx, cart, currency)
+	if err != nil {
+		return summary, errors.Wrap(err, "failed to get shipping quote")
+	}
+	summary.shippingCost = shippingCost
+
+	for _, item := range cart {
+		p, err := fe.getProduct(ctx, item.GetProductId())
+		if err != nil {
+			return summary, errors.Wrapf(err, "could not retrieve product #%s", item.GetProductId())
+		}
+		price, err := fe.convertCurrency(ctx, p.GetPriceUsd(), currency)
+		if err != nil {
+			return summary, errors.Wrapf(err, "could not convert currency for product #%s", item.GetProductId())
+		}
+
+		multPrice := money.MultiplySlow(*price, uint32(item.GetQuantity()))
+		summary.items = append(summary.items, cartItemView{
+			Item:     p,
+			Quantity: item.GetQuantity(),
+			Price:    &multPrice})
+		summary.total = money.Must(money.Sum(summary.total, multPrice))
+	}
+
+	summary.total = money.Must(money.Sum(summary.total, *shippingCost))
+	return summary, nil
+}
+
+func activeDiscountCode(r *http.Request) string {
+	c, _ := r.Cookie(cookieDiscount)
+	if c != nil {
+		return strings.TrimSpace(c.Value)
+	}
+	return ""
+}
+
+func clearDiscountCode(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:   cookieDiscount,
+		Value:  "",
+		MaxAge: -1,
+		Path:   "/",
+	})
+}
+
+func persistDiscountCode(w http.ResponseWriter, code string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:   cookieDiscount,
+		Value:  code,
+		MaxAge: cookieMaxAge,
+		Path:   "/",
+	})
+}
+
+func zeroMoney(currency string) pb.Money {
+	return pb.Money{
+		CurrencyCode: currency,
+		Units:        0,
+		Nanos:        0,
+	}
+}
+
+func (fe *frontendServer) applyDiscountHandler(w http.ResponseWriter, r *http.Request) {
+	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
+	log.Debug("applying discount")
+
+	code := strings.TrimSpace(r.FormValue("discount_code"))
+	if code == "" {
+		clearDiscountCode(w)
+		http.Redirect(w, r, baseUrl+"/cart?discount=cleared", http.StatusSeeOther)
+		return
+	}
+
+	cart, err := fe.getCart(r.Context(), sessionID(r))
+	if err != nil {
+		renderHTTPError(log, r, w, errors.Wrap(err, "could not retrieve cart"), http.StatusInternalServerError)
+		return
+	}
+
+	summary, err := fe.buildCartSummary(r.Context(), cart, currentCurrency(r))
+	if err != nil {
+		renderHTTPError(log, r, w, err, http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := fe.applyDiscount(r.Context(), code, &summary.total)
+	if err != nil {
+		renderHTTPError(log, r, w, errors.Wrap(err, "failed to apply discount"), http.StatusInternalServerError)
+		return
+	}
+
+	status := "invalid"
+	if resp.GetErrorCode() == pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE {
+		persistDiscountCode(w, code)
+		status = "applied"
+	} else {
+		clearDiscountCode(w)
+		if resp.GetErrorCode() == pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NOT_APPLICABLE {
+			status = "not_applicable"
+		}
+	}
+
+	http.Redirect(w, r, baseUrl+"/cart?discount="+status, http.StatusSeeOther)
 }
