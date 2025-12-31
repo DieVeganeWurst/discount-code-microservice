@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/profiler"
@@ -43,8 +44,9 @@ import (
 )
 
 const (
-	listenPort  = "5050"
-	usdCurrency = "USD"
+	listenPort           = "5050"
+	usdCurrency          = "USD"
+	defaultDiscountCode  = "SAVE10"
 )
 
 var log *logrus.Logger
@@ -83,6 +85,10 @@ type checkoutService struct {
 
 	paymentSvcAddr string
 	paymentSvcConn *grpc.ClientConn
+
+	discountCodeSvcAddr string
+	discountCodeSvcConn *grpc.ClientConn
+	discountCode        string
 }
 
 func main() {
@@ -114,6 +120,11 @@ func main() {
 	mustMapEnv(&svc.currencySvcAddr, "CURRENCY_SERVICE_ADDR")
 	mustMapEnv(&svc.emailSvcAddr, "EMAIL_SERVICE_ADDR")
 	mustMapEnv(&svc.paymentSvcAddr, "PAYMENT_SERVICE_ADDR")
+	mapEnvOptional(&svc.discountCodeSvcAddr, "DISCOUNT_CODE_SERVICE_ADDR")
+	svc.discountCode = defaultDiscountCode
+	if value := strings.TrimSpace(os.Getenv("DISCOUNT_CODE")); value != "" {
+		svc.discountCode = value
+	}
 
 	mustConnGRPC(ctx, &svc.shippingSvcConn, svc.shippingSvcAddr)
 	mustConnGRPC(ctx, &svc.productCatalogSvcConn, svc.productCatalogSvcAddr)
@@ -121,6 +132,7 @@ func main() {
 	mustConnGRPC(ctx, &svc.currencySvcConn, svc.currencySvcAddr)
 	mustConnGRPC(ctx, &svc.emailSvcConn, svc.emailSvcAddr)
 	mustConnGRPC(ctx, &svc.paymentSvcConn, svc.paymentSvcAddr)
+	maybeConnGRPC(ctx, &svc.discountCodeSvcConn, svc.discountCodeSvcAddr)
 
 	log.Infof("service config: %+v", svc)
 
@@ -207,6 +219,15 @@ func mustMapEnv(target *string, envKey string) {
 	*target = v
 }
 
+func mapEnvOptional(target *string, envKey string) {
+	v := os.Getenv(envKey)
+	if v == "" {
+		log.Warnf("environment variable %q not set; discount codes disabled", envKey)
+		return
+	}
+	*target = v
+}
+
 func mustConnGRPC(ctx context.Context, conn **grpc.ClientConn, addr string) {
 	var err error
 	_, cancel := context.WithTimeout(ctx, time.Second*3)
@@ -216,6 +237,22 @@ func mustConnGRPC(ctx context.Context, conn **grpc.ClientConn, addr string) {
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	if err != nil {
 		panic(errors.Wrapf(err, "grpc: failed to connect %s", addr))
+	}
+}
+
+func maybeConnGRPC(ctx context.Context, conn **grpc.ClientConn, addr string) {
+	if addr == "" {
+		return
+	}
+	var err error
+	_, cancel := context.WithTimeout(ctx, time.Second*3)
+	defer cancel()
+	*conn, err = grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	if err != nil {
+		log.Warnf("grpc: failed to connect %s: %v", addr, err)
+		*conn = nil
 	}
 }
 
@@ -249,6 +286,8 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		total = money.Must(money.Sum(total, multPrice))
 	}
 
+	total, discountAmount := cs.applyDiscount(ctx, req.UserId, &total, req.GetDiscountCode())
+
 	txID, err := cs.chargeCard(ctx, &total, req.CreditCard)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to charge card: %+v", err)
@@ -268,6 +307,8 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		ShippingCost:       prep.shippingCostLocalized,
 		ShippingAddress:    req.Address,
 		Items:              prep.orderItems,
+		DiscountAmount:     discountAmount,
+		TotalPaid:          &total,
 	}
 
 	if err := cs.sendOrderConfirmation(ctx, req.Email, orderResult); err != nil {
@@ -277,6 +318,47 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 	}
 	resp := &pb.PlaceOrderResponse{Order: orderResult}
 	return resp, nil
+}
+
+func (cs *checkoutService) applyDiscount(ctx context.Context, userID string, total *pb.Money, discountCode string) (pb.Money, *pb.Money) {
+	if cs.discountCodeSvcConn == nil {
+		return *total, nil
+	}
+	code := strings.TrimSpace(discountCode)
+	if code == "" {
+		code = cs.discountCode
+	}
+	if code == "" {
+		return *total, nil
+	}
+	req := &pb.ApplyDiscountRequest{
+		DiscountCode: code,
+		CartTotal:    total,
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second*2)
+	defer cancel()
+	resp, err := pb.NewDiscountCodeServiceClient(cs.discountCodeSvcConn).ApplyDiscount(ctx, req)
+	if err != nil {
+		log.Warnf("discount service failed for user %q: %v", userID, err)
+		return *total, nil
+	}
+	if resp.GetErrorCode() != pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE {
+		log.Infof("discount not applied for user %q: code=%s error=%s", userID, code, resp.GetErrorCode().String())
+		return *total, nil
+	}
+	if resp.GetFinalTotal() == nil {
+		log.Warnf("discount service returned no final total for user %q", userID)
+		return *total, nil
+	}
+	log.Infof("discount applied for user %q: code=%s amount=%s", userID, code, moneyString(resp.GetDiscountAmount()))
+	return *resp.GetFinalTotal(), resp.GetDiscountAmount()
+}
+
+func moneyString(m *pb.Money) string {
+	if m == nil {
+		return "0"
+	}
+	return fmt.Sprintf("%s %d.%09d", m.GetCurrencyCode(), m.GetUnits(), m.GetNanos())
 }
 
 type orderPrep struct {
