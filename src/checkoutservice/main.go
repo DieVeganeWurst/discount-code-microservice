@@ -119,7 +119,7 @@ func main() {
 	mustMapEnv(&svc.currencySvcAddr, "CURRENCY_SERVICE_ADDR")
 	mustMapEnv(&svc.emailSvcAddr, "EMAIL_SERVICE_ADDR")
 	mustMapEnv(&svc.paymentSvcAddr, "PAYMENT_SERVICE_ADDR")
-	mapEnvOrDefault(&svc.discountSvcAddr, "DISCOUNT_CODE_SERVICE_ADDR", "discountcodeservice:7001")
+	mustMapEnv(&svc.discountSvcAddr, "DISCOUNT_CODE_SERVICE_ADDR")
 
 	mustConnGRPC(ctx, &svc.shippingSvcConn, svc.shippingSvcAddr)
 	mustConnGRPC(ctx, &svc.productCatalogSvcConn, svc.productCatalogSvcAddr)
