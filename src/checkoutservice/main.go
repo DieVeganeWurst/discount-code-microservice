@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/profiler"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/GoogleCloudPlatform/microservices-demo/src/checkoutservice/genproto"
@@ -83,6 +85,9 @@ type checkoutService struct {
 
 	paymentSvcAddr string
 	paymentSvcConn *grpc.ClientConn
+
+	discountSvcAddr string
+	discountSvcConn *grpc.ClientConn
 }
 
 func main() {
@@ -114,6 +119,7 @@ func main() {
 	mustMapEnv(&svc.currencySvcAddr, "CURRENCY_SERVICE_ADDR")
 	mustMapEnv(&svc.emailSvcAddr, "EMAIL_SERVICE_ADDR")
 	mustMapEnv(&svc.paymentSvcAddr, "PAYMENT_SERVICE_ADDR")
+	mustMapEnv(&svc.discountSvcAddr, "DISCOUNT_CODE_SERVICE_ADDR")
 
 	mustConnGRPC(ctx, &svc.shippingSvcConn, svc.shippingSvcAddr)
 	mustConnGRPC(ctx, &svc.productCatalogSvcConn, svc.productCatalogSvcAddr)
@@ -121,6 +127,7 @@ func main() {
 	mustConnGRPC(ctx, &svc.currencySvcConn, svc.currencySvcAddr)
 	mustConnGRPC(ctx, &svc.emailSvcConn, svc.emailSvcAddr)
 	mustConnGRPC(ctx, &svc.paymentSvcConn, svc.paymentSvcAddr)
+	mustConnGRPC(ctx, &svc.discountSvcConn, svc.discountSvcAddr)
 
 	log.Infof("service config: %+v", svc)
 
@@ -249,7 +256,30 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		total = money.Must(money.Sum(total, multPrice))
 	}
 
-	txID, err := cs.chargeCard(ctx, &total, req.CreditCard)
+	finalTotal := total
+	discountCode := discountCodeFromContext(ctx)
+	if discountCode != "" {
+		resp, err := pb.NewDiscountCodeServiceClient(cs.discountSvcConn).ApplyDiscount(ctx, &pb.ApplyDiscountRequest{
+			DiscountCode: discountCode,
+			CartTotal:    &finalTotal,
+		})
+		if err != nil {
+			log.WithError(err).Warn("failed to apply discount code during checkout")
+		} else if resp.GetErrorCode() == pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE && resp.GetFinalTotal() != nil {
+			log.WithFields(logrus.Fields{
+				"discount_code":   discountCode,
+				"discount_amount": resp.GetDiscountAmount(),
+			}).Info("discount applied to order")
+			finalTotal = *resp.GetFinalTotal()
+		} else {
+			log.WithFields(logrus.Fields{
+				"discount_code": discountCode,
+				"error_code":    resp.GetErrorCode(),
+			}).Warn("discount rejected during checkout")
+		}
+	}
+
+	txID, err := cs.chargeCard(ctx, &finalTotal, req.CreditCard)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to charge card: %+v", err)
 	}
@@ -391,4 +421,16 @@ func (cs *checkoutService) shipOrder(ctx context.Context, address *pb.Address, i
 		return "", fmt.Errorf("shipment failed: %+v", err)
 	}
 	return resp.GetTrackingId(), nil
+}
+
+func discountCodeFromContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	codes := md.Get("discount-code")
+	if len(codes) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(codes[0])
 }

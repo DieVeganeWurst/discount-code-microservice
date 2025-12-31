@@ -91,20 +91,55 @@
                     </div>
 
                     <div class="row cart-summary-total-row">
-                        <div class="col pl-md-0">Total</div>
+                        <div class="col pl-md-0">Subtotal</div>
                         <div class="col pr-md-0 text-right">{{ renderMoney .total_cost }}</div>
                     </div>
 
-                    <div class="form-row">
+                    {{ if .discount_code }}
+                    <div class="row cart-summary-discount-row">
+                        <div class="col pl-md-0">Discount ({{ .discount_code }})</div>
+                        <div class="col pr-md-0 text-right">-{{ renderMoney .discount_amount }}</div>
+                    </div>
+                    <div class="row cart-summary-total-row">
+                        <div class="col pl-md-0">Total after discount</div>
+                        <div class="col pr-md-0 text-right">{{ renderMoney .final_cost }}</div>
+                    </div>
+                    {{ else }}
+                    <div class="row cart-summary-total-row">
+                        <div class="col pl-md-0">Total</div>
+                        <div class="col pr-md-0 text-right">{{ renderMoney .final_cost }}</div>
+                    </div>
+                    {{ end }}
+
+                    <form method="POST" action="{{ $.baseUrl }}/cart/discount">
+                        <div class="form-row">
                             <div class="col cymbal-form-field">
                                 <label for="discount_code">Enter Discount Code</label>
                                 <input type="text"
-                                    name="discount_code" id="discount_code" value="94043" required pattern="\d{4,5}">
+                                    name="discount_code" id="discount_code"
+                                    value="{{ if .discount_code }}{{ .discount_code }}{{ else }}94043{{ end }}"
+                                    required pattern="\d{4,5}">
                             </div>
                             <button class="cymbal-button-primary" type="submit">
-                                    Redeem <code></code>
-                                </button>
+                                Redeem <code></code>
+                            </button>
                         </div>
+                        {{ if .discount_status }}
+                        <div class="form-row">
+                            <div class="col cymbal-form-field">
+                                {{ if eq .discount_status "applied" }}
+                                    <p class="text-success mb-0">Discount applied.</p>
+                                {{ else if eq .discount_status "not_applicable" }}
+                                    <p class="text-warning mb-0">Discount cannot be applied to the current cart.</p>
+                                {{ else if eq .discount_status "cleared" }}
+                                    <p class="text-muted mb-0">Discount removed.</p>
+                                {{ else }}
+                                    <p class="text-danger mb-0">Invalid discount code.</p>
+                                {{ end }}
+                            </div>
+                        </div>
+                        {{ end }}
+                    </form>
 
                 </div>
 
