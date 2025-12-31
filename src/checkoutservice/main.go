@@ -214,6 +214,14 @@ func mustMapEnv(target *string, envKey string) {
 	*target = v
 }
 
+func mapEnvOrDefault(target *string, envKey, defaultVal string) {
+	v := os.Getenv(envKey)
+	if v == "" {
+		v = defaultVal
+	}
+	*target = v
+}
+
 func mustConnGRPC(ctx context.Context, conn **grpc.ClientConn, addr string) {
 	var err error
 	_, cancel := context.WithTimeout(ctx, time.Second*3)
