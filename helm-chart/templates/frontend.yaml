@@ -102,12 +102,14 @@ spec:
             value: "{{ .Values.recommendationService.name }}:8080"
           - name: SHIPPING_SERVICE_ADDR
             value: "{{ .Values.shippingService.name }}:50051"
-          - name: CHECKOUT_SERVICE_ADDR
-            value: "{{ .Values.checkoutService.name }}:5050"
-          - name: AD_SERVICE_ADDR
-            value: "{{ .Values.adService.name }}:9555"
-          - name: SHOPPING_ASSISTANT_SERVICE_ADDR
-            value: "{{ .Values.shoppingAssistantService.name }}:80"
+        - name: CHECKOUT_SERVICE_ADDR
+          value: "{{ .Values.checkoutService.name }}:5050"
+        - name: AD_SERVICE_ADDR
+          value: "{{ .Values.adService.name }}:9555"
+        - name: DISCOUNT_CODE_SERVICE_ADDR
+          value: "{{ .Values.discountCodeService.name }}:7001"
+        - name: SHOPPING_ASSISTANT_SERVICE_ADDR
+          value: "{{ .Values.shoppingAssistantService.name }}:80"
           - name: ENV_PLATFORM
             value: {{ .Values.frontend.platform | quote }}
           {{- if .Values.opentelemetryCollector.create }}
