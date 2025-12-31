@@ -90,21 +90,28 @@
                         <div class="col pr-md-0 text-right">{{ renderMoney .shipping_cost }}</div>
                     </div>
 
+                    {{ if .show_discount }}
+                    <div class="row cart-summary-shipping-row">
+                        <div class="col pl-md-0">Discount</div>
+                        <div class="col pr-md-0 text-right">-{{ renderMoney .discount_amount }}</div>
+                    </div>
+                    {{ end }}
+
                     <div class="row cart-summary-total-row">
                         <div class="col pl-md-0">Total</div>
                         <div class="col pr-md-0 text-right">{{ renderMoney .total_cost }}</div>
                     </div>
 
-                    <div class="form-row">
+                    <form class="form-row" method="POST" action="{{ $.baseUrl }}/cart/discount">
                             <div class="col cymbal-form-field">
                                 <label for="discount_code">Enter Discount Code</label>
                                 <input type="text"
-                                    name="discount_code" id="discount_code" value="94043" required pattern="\d{4,5}">
+                                    name="discount_code" id="discount_code" value="{{ $.discount_code }}">
                             </div>
                             <button class="cymbal-button-primary" type="submit">
                                     Redeem <code></code>
                                 </button>
-                        </div>
+                        </form>
 
                 </div>
 

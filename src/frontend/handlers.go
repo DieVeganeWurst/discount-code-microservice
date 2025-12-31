@@ -301,6 +301,10 @@ func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request
 		totalPrice = money.Must(money.Sum(totalPrice, multPrice))
 	}
 	totalPrice = money.Must(money.Sum(totalPrice, *shippingCost))
+	discountAmount, discountedTotal := fe.applyDiscountPreview(r.Context(), log, totalPrice, currentDiscountCode(r))
+	if discountedTotal != nil {
+		totalPrice = *discountedTotal
+	}
 	year := time.Now().Year()
 
 	if err := templates.ExecuteTemplate(w, "cart", injectCommonTemplateData(r, map[string]interface{}{
@@ -310,11 +314,53 @@ func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request
 		"shipping_cost":    shippingCost,
 		"show_currency":    true,
 		"total_cost":       totalPrice,
+		"discount_amount":  discountAmount,
+		"show_discount":    discountAmount != nil && (discountAmount.GetUnits() != 0 || discountAmount.GetNanos() != 0),
+		"discount_code":    currentDiscountCode(r),
 		"items":            items,
 		"expiration_years": []int{year, year + 1, year + 2, year + 3, year + 4},
 	})); err != nil {
 		log.Println(err)
 	}
+}
+
+func (fe *frontendServer) applyDiscountCodeHandler(w http.ResponseWriter, r *http.Request) {
+	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
+	log.Debug("applying discount code")
+
+	code := strings.TrimSpace(r.FormValue("discount_code"))
+	if code == "" {
+		expireCookie(w, cookieDiscount)
+	} else {
+		http.SetCookie(w, &http.Cookie{
+			Name:   cookieDiscount,
+			Value:  code,
+			MaxAge: cookieMaxAge,
+		})
+	}
+	w.Header().Set("Location", baseUrl+"/cart")
+	w.WriteHeader(http.StatusFound)
+}
+
+func (fe *frontendServer) applyDiscountPreview(ctx context.Context, log logrus.FieldLogger, total pb.Money, code string) (*pb.Money, *pb.Money) {
+	if fe.discountCodeSvcConn == nil || strings.TrimSpace(code) == "" {
+		return nil, nil
+	}
+	req := &pb.ApplyDiscountRequest{
+		DiscountCode: strings.TrimSpace(code),
+		CartTotal:    &total,
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second*2)
+	defer cancel()
+	resp, err := pb.NewDiscountCodeServiceClient(fe.discountCodeSvcConn).ApplyDiscount(ctx, req)
+	if err != nil {
+		log.WithField("error", err).Warn("failed to preview discount")
+		return nil, nil
+	}
+	if resp.GetErrorCode() != pb.DiscountErrorCode_DISCOUNT_ERROR_CODE_NONE || resp.GetFinalTotal() == nil {
+		return nil, nil
+	}
+	return resp.GetDiscountAmount(), resp.GetFinalTotal()
 }
 
 func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Request) {
@@ -323,6 +369,7 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 
 	var (
 		email         = r.FormValue("email")
+		discountCode = strings.TrimSpace(r.FormValue("discount_code"))
 		streetAddress = r.FormValue("street_address")
 		zipCode, _    = strconv.ParseInt(r.FormValue("zip_code"), 10, 32)
 		city          = r.FormValue("city")
@@ -333,6 +380,9 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		ccYear, _     = strconv.ParseInt(r.FormValue("credit_card_expiration_year"), 10, 32)
 		ccCVV, _      = strconv.ParseInt(r.FormValue("credit_card_cvv"), 10, 32)
 	)
+	if discountCode == "" {
+		discountCode = currentDiscountCode(r)
+	}
 
 	payload := validator.PlaceOrderPayload{
 		Email:         email,
@@ -361,6 +411,7 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 				CreditCardCvv:             int32(payload.CcCVV)},
 			UserId:       sessionID(r),
 			UserCurrency: currentCurrency(r),
+			DiscountCode: discountCode,
 			Address: &pb.Address{
 				StreetAddress: payload.StreetAddress,
 				City:          payload.City,
@@ -377,11 +428,18 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 	order.GetOrder().GetItems()
 	recommendations, _ := fe.getRecommendations(r.Context(), sessionID(r), nil)
 
-	totalPaid := *order.GetOrder().GetShippingCost()
-	for _, v := range order.GetOrder().GetItems() {
-		multPrice := money.MultiplySlow(*v.GetCost(), uint32(v.GetItem().GetQuantity()))
-		totalPaid = money.Must(money.Sum(totalPaid, multPrice))
+	var totalPaid pb.Money
+	if order.GetOrder().GetTotalPaid() != nil {
+		totalPaid = *order.GetOrder().GetTotalPaid()
+	} else {
+		totalPaid = *order.GetOrder().GetShippingCost()
+		for _, v := range order.GetOrder().GetItems() {
+			multPrice := money.MultiplySlow(*v.GetCost(), uint32(v.GetItem().GetQuantity()))
+			totalPaid = money.Must(money.Sum(totalPaid, multPrice))
+		}
 	}
+	discountAmount := order.GetOrder().GetDiscountAmount()
+	showDiscount := discountAmount != nil && (discountAmount.GetUnits() != 0 || discountAmount.GetNanos() != 0)
 
 	currencies, err := fe.getCurrencies(r.Context())
 	if err != nil {
@@ -394,6 +452,8 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		"currencies":      currencies,
 		"order":           order.GetOrder(),
 		"total_paid":      &totalPaid,
+		"discount_amount": discountAmount,
+		"show_discount":   showDiscount,
 		"recommendations": recommendations,
 	})); err != nil {
 		log.Println(err)
@@ -425,6 +485,14 @@ func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Location", baseUrl + "/")
 	w.WriteHeader(http.StatusFound)
+}
+
+func expireCookie(w http.ResponseWriter, name string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:   name,
+		Value:  "",
+		MaxAge: -1,
+	})
 }
 
 func (fe *frontendServer) getProductByID(w http.ResponseWriter, r *http.Request) {
@@ -576,6 +644,14 @@ func currentCurrency(r *http.Request) string {
 		return c.Value
 	}
 	return defaultCurrency
+}
+
+func currentDiscountCode(r *http.Request) string {
+	c, _ := r.Cookie(cookieDiscount)
+	if c != nil {
+		return c.Value
+	}
+	return ""
 }
 
 func sessionID(r *http.Request) string {
