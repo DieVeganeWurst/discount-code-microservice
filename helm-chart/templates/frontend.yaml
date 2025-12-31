@@ -106,6 +106,8 @@ spec:
             value: "{{ .Values.checkoutService.name }}:5050"
           - name: AD_SERVICE_ADDR
             value: "{{ .Values.adService.name }}:9555"
+          - name: DISCOUNT_CODE_SERVICE_ADDR
+            value: "{{ .Values.discountCodeService.name }}:7001"
           - name: SHOPPING_ASSISTANT_SERVICE_ADDR
             value: "{{ .Values.shoppingAssistantService.name }}:80"
           - name: ENV_PLATFORM
