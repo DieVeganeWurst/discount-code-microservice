@@ -1,6 +1,5 @@
 name: CI Discount Code Service
 
-# Run this workflow on pushes and PRs targeting the deploy branch
 on:
   push:
     branches: [ "deploy" ]
@@ -8,39 +7,70 @@ on:
     branches: [ "deploy" ]
 
 jobs:
+  # Job 1: Build and Unit Testing
+  # Goals: Ensure code compiles and passing basic logic checks
   test-and-build:
     runs-on: ubuntu-latest
-    
-    # Setting the working directory globally for all run commands
-    # Update this path if the microservice is moved to a subfolder
     defaults:
       run:
         working-directory: ./src/discountcodeservice
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout code from repository
+        uses: actions/checkout@v4
 
-    - name: Setup Go environment
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-        # Enable caching for faster subsequent runs
-        cache: true
-        # Use wildcard to find go.sum even if it's nested
-        cache-dependency-path: "**/go.sum"
+      - name: Setup Go environment (v1.21)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+          # Pointing to the specific go.sum for caching efficiency
+          cache-dependency-path: src/discountcodeservice/go.sum
 
-    - name: Download dependencies
-      run: go mod download
+      - name: Fetch dependencies
+        run: go mod download
 
-    - name: Check code formatting
-      # Ensuring code follows Go standards before testing
-      run: go fmt ./...
+      - name: Run unit tests
+        # Testing individual functions of the discount logic
+        run: go test -v ./...
 
-    - name: Run unit tests
-      # Execute all tests in the package with verbose output
-      run: go test -v ./...
+      - name: Build microservice binary
+        # Verifying that the code is ready for containerization
+        run: go build -v ./...
 
-    - name: Build service
-      # Verify the microservice compiles successfully
-      run: go build -v ./...
+  # Job 2: Reliability & Integration Testing
+  # Goals: Stress test the service in a real K8s environment to measure Reliability
+  reliability-test:
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Minikube (Local K8s Cluster)
+        # We need a real cluster to test the service as a "Worker Machine" [cite: 555]
+        uses: medyagh/setup-minikube@master
+
+      - name: Install grpcurl tool
+        # Essential for communicating with the gRPC interface of the Boutique [cite: 43, 896]
+        run: |
+          go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Deploy Service to Minikube
+        # Using declarative IaC principles to deploy the service [cite: 311]
+        run: |
+          kubectl apply -f ./src/discountcodeservice/deployment.yaml
+          # Ensuring the service is ready before stressing it
+          kubectl wait --for=condition=available deployment/discountcodeservice --timeout=60s
+
+      - name: Execute Reliability Benchmark
+        # Running the custom bash script to measure success rate under concurrency
+        # This step validates our 'focus quality' (Reliability) [cite: 87, 128]
+        run: |
+          chmod +x ./scripts/benchmark.sh
+          ./scripts/benchmark.sh
+        env:
+          DEPLOY_NAME: "discountcodeservice"
+          TOTAL_REQUESTS: 50
+          CONCURRENT_REQUESTS: 10
