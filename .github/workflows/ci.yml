@@ -98,7 +98,7 @@ jobs:
         # Running the custom bash script to measure success rate under concurrency
         # This step validates our 'focus quality' (Reliability) [cite: 87, 128]
         run: |
-          chmod +x ./scripts/benchmark.sh
+          chmod +x ./scripts/request_benchmark.sh
           ./scripts/benchmark.sh
         env:
           DEPLOY_NAME: "discountcodeservice"
