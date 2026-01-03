@@ -51,18 +51,48 @@ jobs:
         # We need a real cluster to test the service as a "Worker Machine" [cite: 555]
         uses: medyagh/setup-minikube@master
 
+      - name: Build Docker image inside Minikube
+        run: |
+          eval $(minikube -p minikube docker-env)
+          docker build -t discountcodeservice:ci ./src/discountcodeservice
+
       - name: Install grpcurl tool
         # Essential for communicating with the gRPC interface of the Boutique [cite: 43, 896]
         run: |
           go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
-      - name: Deploy Service to Minikube
-        # Using declarative IaC principles to deploy the service [cite: 311]
+      - name: Deploy Service to Minikube (with debug)
         run: |
           kubectl apply -f ./src/discountcodeservice/deployment.yaml
-          # Ensuring the service is ready before stressing it
-          kubectl wait --for=condition=available deployment/discountcodeservice --timeout=60s
+
+          # Detecta automáticamente el nombre del contenedor en el deployment
+          CONTAINER_NAME=$(kubectl get deploy discountcodeservice -o jsonpath='{.spec.template.spec.containers[0].name}')
+          echo "Container name is: $CONTAINER_NAME"
+          
+          # Fuerza a usar la imagen que acabamos de construir en Minikube
+          kubectl set image deployment/discountcodeservice ${CONTAINER_NAME}=discountcodeservice:ci
+
+          # Espera a que el rollout termine (mejor que kubectl wait)
+          kubectl rollout status deployment/discountcodeservice --timeout=180s || (
+            echo "=== Deployment describe ==="
+            kubectl describe deployment discountcodeservice || true
+
+            echo "=== Pods ==="
+            kubectl get pods -o wide
+
+            echo "=== Pod describe ==="
+            kubectl describe pods || true
+
+            echo "=== Events ==="
+            kubectl get events --sort-by=.metadata.creationTimestamp || true
+
+            echo "=== Logs ==="
+            kubectl logs -l app=discountcodeservice --all-containers=true --tail=200 || true
+
+            exit 1
+          )
+
 
       - name: Execute Reliability Benchmark
         # Running the custom bash script to measure success rate under concurrency
