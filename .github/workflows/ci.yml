@@ -4,6 +4,7 @@ name: Discount Service CI
 # - pull_request: when a PR is opened or updated
 # - push: when commits are pushed to the deployment branch
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [ "deployment" ]
