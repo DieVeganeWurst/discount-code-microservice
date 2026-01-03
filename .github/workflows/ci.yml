@@ -1,5 +1,6 @@
 name: CI Discount Code Service
 
+# Run this workflow on pushes and PRs targeting the deploy branch
 on:
   push:
     branches: [ "deploy" ]
@@ -9,26 +10,37 @@ on:
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    
+    # Setting the working directory globally for all run commands
+    # Update this path if the microservice is moved to a subfolder
+    defaults:
+      run:
+        working-directory: .
 
     steps:
-    - name: Checkout del código
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Configurar Go
+    - name: Setup Go environment
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21' # Versión estándar para microservicios de Google
+        go-version: '1.21'
+        # Enable caching for faster subsequent runs
         cache: true
+        # Use wildcard to find go.sum even if it's nested
+        cache-dependency-path: "**/go.sum"
 
-    - name: Instalar dependencias
+    - name: Download dependencies
       run: go mod download
 
-    - name: Verificar formato (Lint)
+    - name: Check code formatting
+      # Ensuring code follows Go standards before testing
       run: go fmt ./...
 
-    - name: Ejecutar Tests
-      # Esto buscará todos los archivos _test.go en tu microservicio
+    - name: Run unit tests
+      # Execute all tests in the package with verbose output
       run: go test -v ./...
 
-    - name: Compilar (Build)
+    - name: Build service
+      # Verify the microservice compiles successfully
       run: go build -v ./...
