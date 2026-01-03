@@ -1,0 +1,61 @@
+name: Discount Service CI
+
+# This section defines WHEN the pipeline runs.
+# - pull_request: when a PR is opened or updated
+# - push: when commits are pushed to the deployment branch
+on:
+  pull_request:
+  push:
+    branches: [ "deployment" ]
+
+jobs:
+  discountservice-ci:
+    # GitHub provides a Linux virtual machine to run the pipeline
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      # This downloads the code into the runner machine
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Basic debug information
+      # Useful to see folder structure if something fails
+      - name: Debug - show repo structure
+        run: |
+          echo "Current directory:"
+          pwd
+          echo "Repository content:"
+          ls -la
+          echo "src folder:"
+          ls -la src || true
+
+      # Step 3: Linting
+      # Checks code style and simple errors
+      - name: Lint
+        working-directory: src/discountservice
+        run: make lint
+
+      # Step 4: Unit tests
+      # If tests fail, the pipeline should fail
+      - name: Unit tests
+        working-directory: src/discountservice
+        run: make test
+
+      # Step 5: Build step
+      # Compiles or prepares the service (depends on the language)
+      - name: Build
+        working-directory: src/discountservice
+        run: make build
+
+      # Step 6: Build Docker image
+      # Creates a container image for the discount service
+      - name: Docker build
+        working-directory: src/discountservice
+        run: make docker-build
+
+      # Step 7: Smoke test
+      # Very small test to check that the service can start
+      - name: Smoke test
+        working-directory: src/discountservice
+        run: make smoke
