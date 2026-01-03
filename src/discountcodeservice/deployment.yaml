@@ -15,9 +15,9 @@ spec:
     spec:
       containers:
       - name: server
-        image: discountcodeservice:latest
+        image: discountcodeservice:ci
         # Crucial: Prevent K8s from trying to pull from a remote registry
-        imagePullPolicy: Never 
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 7001
         # Self-healing: Automated container restart if gRPC hangs
