@@ -93,6 +93,10 @@ jobs:
             exit 1
           )
 
+      - name: Run smoke test
+        run: |
+          chmod +x ./scripts/smoke_test_discount.sh
+          ./scripts/smoke_test_discount.sh
 
       - name: Execute Reliability Benchmark
         # Running the custom bash script to measure success rate under concurrency
