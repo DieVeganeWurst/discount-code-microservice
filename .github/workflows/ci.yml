@@ -1,26 +1,25 @@
 name: Discount Service CI
 
-# This section defines WHEN the pipeline runs.
-# - pull_request: when a PR is opened or updated
+# When to run:
+# - workflow_dispatch: manual run from the Actions tab (useful while setting things up)
+# - pull_request: when a PR is opened/updated
 # - push: when commits are pushed to the deployment branch
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [ "deployment" ]
 
 jobs:
   discountservice-ci:
-    # GitHub provides a Linux virtual machine to run the pipeline
     runs-on: ubuntu-latest
 
     steps:
       # Step 1: Checkout the repository
-      # This downloads the code into the runner machine
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Basic debug information
-      # Useful to see folder structure if something fails
+      # Step 2: Quick debug (helps if paths are wrong)
       - name: Debug - show repo structure
         run: |
           echo "Current directory:"
@@ -29,33 +28,31 @@ jobs:
           ls -la
           echo "src folder:"
           ls -la src || true
+          echo "discountcodeservice folder (expected):"
+          ls -la src/discountcodeservice || true
 
-      # Step 3: Linting
-      # Checks code style and simple errors
+      # NOTE:
+      # Our unit tests are inside src/discountcodeservice (main_test.go),
+      # so the working-directory must point there.
+      # Also we use Makefile targets so the workflow stays simple.
+
       - name: Lint
-        working-directory: src/discountservice
+        working-directory: src/discountcodeservice
         run: make lint
 
-      # Step 4: Unit tests
-      # If tests fail, the pipeline should fail
       - name: Unit tests
-        working-directory: src/discountservice
+        working-directory: src/discountcodeservice
         run: make test
 
-      # Step 5: Build step
-      # Compiles or prepares the service (depends on the language)
       - name: Build
-        working-directory: src/discountservice
+        working-directory: src/discountcodeservice
         run: make build
 
-      # Step 6: Build Docker image
-      # Creates a container image for the discount service
       - name: Docker build
-        working-directory: src/discountservice
+        working-directory: src/discountcodeservice
         run: make docker-build
 
-      # Step 7: Smoke test
-      # Very small test to check that the service can start
       - name: Smoke test
-        working-directory: src/discountservice
+        working-directory: src/discountcodeservice
         run: make smoke
+
