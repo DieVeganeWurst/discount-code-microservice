@@ -99,7 +99,7 @@ jobs:
         # This step validates our 'focus quality' (Reliability) [cite: 87, 128]
         run: |
           chmod +x ./scripts/request_benchmark.sh
-          ./scripts/benchmark.sh
+          ./request_scripts/benchmark.sh
         env:
           DEPLOY_NAME: "discountcodeservice"
           TOTAL_REQUESTS: 50
