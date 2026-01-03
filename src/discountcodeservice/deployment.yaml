@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discountcodeservice
+spec:
+  # Reliability: We use 3 replicas to ensure horizontal scalability. 
+  # If one pod crashes, the service remains available (Scale-out)[cite: 238, 529, 579].
+  replicas: 3
+  selector:
+    matchLabels:
+      app: discountcodeservice
+  template:
+    metadata:
+      labels:
+        app: discountcodeservice
+    spec:
+      containers:
+      - name: server
+        # This matches the image name built in your pipeline[cite: 397].
+        image: discountcodeservice:latest
+        imagePullPolicy: Never # Critical for Minikube to use local images
+        ports:
+        - containerPort: 7001
+        # Self-healing: Kubernetes will restart the container if it stops responding.
+        livenessProbe:
+          tcpSocket:
+            port: 7001
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        # Readiness: Ensures the service only receives traffic when fully ready[cite: 514, 521].
+        readinessProbe:
+          tcpSocket:
+            port: 7001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: discountcodeservice
+spec:
+  # Internal service discovery within the cluster.
+  type: ClusterIP
+  selector:
+    app: discountcodeservice
+  ports:
+  - name: grpc
+    port: 7001
+    targetPort: 7001
