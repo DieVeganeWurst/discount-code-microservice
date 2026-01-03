@@ -15,7 +15,7 @@ jobs:
     # Update this path if the microservice is moved to a subfolder
     defaults:
       run:
-        working-directory: .
+        working-directory: ./src/discountcodeservice
 
     steps:
     - name: Checkout repository
