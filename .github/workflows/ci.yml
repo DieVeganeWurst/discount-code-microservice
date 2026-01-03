@@ -40,9 +40,9 @@ jobs:
         working-directory: src/discountcodeservice
         run: make lint
 
-      - name: Unit tests
+      - name: Unit tests (Go)
         working-directory: src/discountcodeservice
-        run: make test
+        run: go test ./... -count=1
 
       - name: Build
         working-directory: src/discountcodeservice
