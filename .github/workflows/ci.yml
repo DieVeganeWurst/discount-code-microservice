@@ -2,9 +2,7 @@ name: CI Discount Code Service
 
 on:
   push:
-    branches: [ "deploy" ]
   pull_request:
-    branches: [ "deploy" ]
 
 jobs:
   # Job 1: Build and Unit Testing
