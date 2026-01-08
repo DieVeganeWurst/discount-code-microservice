@@ -32,6 +32,8 @@ Check deployment status:
 kubectl get pods -l app=discountcodeservice
 kubectl get svc discountcodeservice
 
+Smoke tests and benchmarks are executed as part of the CI pipeline after deploying the service to Kubernetes. Skaffold is used for development and full-stack deployment, while reliability checks are intentionally kept in CI to avoid slowing down developer workflows and to ensure consistent, automated verification.
+
 CI PIPELINE:
 The CI pipeline automatically:
 - runs unit tests
@@ -43,4 +45,7 @@ The pipeline is scoped to the DiscountCodeService to keep CI execution fast and 
 (Optional) DEPLOYMENT VIA SKAFFOLD:
 When using the full Online Boutique setup, the service can also be deployed via Skaffold:
 skaffold run -m app
+
+
+Running individual steps manually
 
